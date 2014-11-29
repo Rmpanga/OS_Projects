@@ -1,0 +1,14 @@
+hello
+this
+is 
+a 
+test
+for
+foo
+0
+.
+txt
+is
+it
+working
+

@@ -1,0 +1,288 @@
+#include<iostream>
+#include<fstream>
+#include<vector>
+#include<string>
+#include<stdlib.h>
+#include<queue>
+#include<pthread.h>
+
+using namespace std;
+ int maxMappers;
+ int maxReducers;
+ int active_mappers;
+ int active_reducers;
+
+struct wordNode; 
+class ReducerBuffer;
+
+pthread_mutex_t bufferLock;
+pthread_cond_t fullCondition;
+pthread_cond_t emptyCondition;
+
+vector <ReducerBuffer> reducerBuffers;
+
+
+struct wordNode 
+{
+ string word;
+ string filename;
+ int linenumber;
+};
+
+class ReducerBuffer
+{
+ private:
+    std::queue<wordNode> F;
+    int size = 0;
+    const int  max = 10;
+
+ public:
+
+   queue<wordNode> getQueue()
+   {
+    return bufferqueue;
+   } 
+  
+  
+   void insert(wordNode node)
+   {
+    if (size < 10 )
+     {
+     bufferqueue.push(node);
+     size++;
+     } 
+    else 
+    {
+     cout << "   ReducerBuffer is full--WAIT" << endl;
+    }
+
+  }
+  
+    wordNode remove ()
+    { 
+      if (size > 0)
+       {
+       size--;
+       wordNode temp = bufferqueue.front();
+       bufferqueue.pop();
+       return temp;  
+      }
+      else
+        cout << "   ReducerBuffer is empty" << endl; 
+    }
+
+   int isFull()
+    {
+    return (size == max);
+    }
+
+   int isEmpty()
+   {
+    return (size == 0);
+   }
+   int getSize()
+   {
+    return size;
+   }
+
+
+
+};
+
+
+int hashfunction(string word)
+{
+  int sum = 0;
+  for(unsigned int i =0; i < word.length(); i++)
+      sum = sum + int(word[i]);
+ return sum;
+}
+
+class mapper
+{
+ public:
+  int linenumber = 1;
+  ifstream readin; 
+  string word;
+  vector<wordNode> wordlist;
+  string filename;
+
+   
+   void readFile(string fn)
+   {
+     filename = fn;
+     readin.open(filename);
+     while(!readin.eof())
+     {
+       getline(readin, word);
+      
+       if (word.size() !=0)
+       {
+       wordNode wn;
+       wn.word = word;
+       wn.linenumber = linenumber;
+       wordlist.push_back(wn);
+       linenumber++;
+       }
+     }
+     readin.close();
+   } 
+
+
+   vector<wordNode> getWordList()
+   {
+    return wordlist;
+   }
+   
+   int getLineNumber()
+   {
+    return linenumber;
+   }
+   
+  string getFileName()
+  {
+   return filename;
+  }
+  
+   string getWord()
+   {
+    return word;
+   }
+
+};
+
+class reducer //Remove array add a queue structure
+{
+ public:
+   int currentIdx = 0;
+   wordNode buffer[10];
+ 
+  void insertNode(wordNode w)
+  {
+   buffer[currentIdx] = w;
+   currentIdx++;
+  }  
+  
+  wordNode removeWord()
+  {
+    wordNode word = buffer[currentIdx];
+    currentIdx--;
+    return word;
+  }
+  
+  int isFull()
+  {
+   if (currentIdx >= 10)
+     return 1;
+   else
+     return 0;
+  }
+ 
+  int isEmpty()
+  {
+   if (currentIdx == 0)
+    return 1;
+   else
+    return 0; 
+  }
+};
+
+
+void *mapping(void *threadID)
+{
+  int id = (long )threadID;
+  cout << "   " << "Mapper ThreadID: " << to_string(id) << " starting..\n" << flush;
+  string filename = "foo" + to_string(id) +".txt";
+  mapper mp;
+  vector<wordNode> wordlist;                    //word list
+  mp.readFile(filename);                        //generating wordlist
+  wordlist = mp.getWordList();
+  cout << "     " <<"FileName:  " <<  mp.getFileName() <<"\n";
+
+  for (unsigned int i =0; i <wordlist.size(); i++)
+  {
+   int hashVal = hashfunction(wordlist[i].word); 
+   int reducer = hashVal % maxReducers; 
+   
+   while( reducerBuffers[reducer].isFull())
+   {
+     pthread_cond_wait(&fullCondition , &bufferLock); 
+   }
+ 
+   reducerBuffers[reducer].insert(wordlist[i]); //Adding to thread
+   pthread_cond_signal(&emptyCondition);
+   pthread_mutex_unlock(&bufferLock);
+  }
+    
+   // for each word in word list map to reducer
+  // put word in reducer buffer if its not full
+  // if full wait for signal
+
+  wordNode n = wordlist.front();
+  
+return 0;
+}
+
+void *reducing(void *threadID)
+{
+  cout << "   Reducer thread: starting\n" << flush;
+  int tid = (long) threadID;
+ while (active_mappers != 0 || reducerBuffers[threadID].isEmpty())
+ {
+   while(reducerBuffers[tid].isEmpty())
+   {
+    pthread_cond_wait(&emptyCondition, NULL);  //<-------Check
+   }
+    cout <<"    Reducer thread: removing\n" << flush; 
+    wordNode element = reducerBuffers[threadID].remove();
+    
+    /** Insert wordNode to hashtable **/
+    pthread_cond_signal(&fullCondition);
+  }
+  cout << "   Reducer thread  " << to_string(threadID) <<":  NO Mappers, My queue is empty -DONE " << to_string(threadID) <<"\n" <<flush; 
+   
+return 0;
+}
+ 
+
+
+int main(int argc, char* argv[])
+{
+   
+  if (argv[1] == nullptr || argv[2] == nullptr)
+  {
+    cout << " ERROR: Entered NULL values for mappers and reducers\n" << endl;
+    return 0;
+  }
+
+  maxMappers =  atoi(argv[1]);
+  maxReducers = atoi(argv[2]);
+  pthread_t mThreads[maxMappers];
+  pthread_t rThreads[maxReducers];
+  pthread_cond_init(&fullCondition  , NULL );
+  pthread_cond_init(&emptyCondition , NULL );
+  pthread_mutex_init(&bufferLock , NULL);
+
+    cout << " Main : Creating Mapper Threads...\n" << flush;
+    for (int m = 0; m <maxMappers; m++)
+    {
+       pthread_create(&(mThreads[m]), NULL , mapping ,(void *)m );
+       cout << " Main created a mapper thread\n" <<flush;
+    }
+
+    cout << " Main : Creating Reducer Threads...\n" << flush;
+    for (int n = 0; n <maxReducers; n++)
+   {
+       pthread_create(&(rThreads[n]), NULL, reducing , (void *)n);
+   //  ReducerBuffer r = new ReducerBuffer();
+       reducerBuffers.push_back(ReducerBuffer());
+       cout <<" Main created a reducer thread\n" << flush;
+   }
+
+//Testing ReducerBuffer
+  
+ //for loop --
+ //  pthread_join(&(mThreads[m]) , &mstatus);
+ //  pthread_join(&(rThreads[n]) , &pstatus); 
+   pthread_exit(NULL);
+}
