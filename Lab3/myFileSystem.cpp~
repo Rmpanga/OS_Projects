@@ -3,22 +3,38 @@
 //#include <sys/types.h>
 //#include <sys/stat.h>
 #include <fcntl.h>
-
+#include <string.h>
+#include <fstream>
 /* IDEAS
    Scan file once and just update the freeblock 
 
 */
 
+
+
+struct Inode
+{
+ char filename[8];
+ int size;
+ int blockPointers[8];
+ int used;
+};
+
+
 class FileSystem
 {
 public:
  FILE *disk; 
- int fd; // File Descriptor --DO NOT NEED	
+ int fd; // File Descriptor --DO NOT NEED
+ const char * diskName;	
  const int offset = 1024;
+ const int maxInodes = 16;
+ const int maxBlocks = 128;
 
- FileSystem(char diskName[16])
-  {
-    disk = fopen(diskName , "r+");
+FileSystem(char dName[16])
+ {
+    disk = fopen(dName , "r+");
+    diskName = dName;
     if (disk == NULL)
      printf("Error Opening Disk\n");
       // if  (fd = open(diskName , O_RDWR) < 0)
@@ -28,6 +44,51 @@ public:
     // this file will act as the "disk" for your file system
   }
 
+void populateInodes()
+{
+   //disk = freopen (diskName , "r+" , disk);
+  // printf("[PopulateInodes] : Disk was closed opening it now.."); 
+   fseek(disk, 128, SEEK_SET); // Skipping over freeBlock list
+   for (int j = 0; j< 16; j++)
+   { 
+    Inode newInode;
+    newInode.size = j;
+    fwrite( (char *) &newInode, sizeof(Inode), 1 , disk); 
+   }
+   
+   //printf("Number of elements written %d\n" , wrote);
+   //printf("Populating Inodes %lu\n" , sizeof(struct Inode));
+   fseek(disk , sizeof(Inode) * 16 * -1, SEEK_CUR);
+   Inode *inodes = new Inode[maxInodes];
+   fread(inodes , 48, 16, disk); 
+   
+   for (int j = 0; j <16; j++)
+   {
+    printf("Inode %d size is %d\n" , j , inodes[j].size);
+   }
+    
+
+ }
+
+
+int getFreeBlocks()
+{
+ int freeBlocks = 0; 
+
+ fseek(disk, 1, SEEK_SET); //Skipping the super block  
+ for (int j = 1; j<128; j++) // Counting free blocks
+  {
+    int c = getc(disk);
+     //printf("Int c: %d\n" , c); 
+    if (c == 0)   
+     {       
+       freeBlocks++; 
+     }
+  }
+
+
+  return freeBlocks;
+}
 
 
 
@@ -38,49 +99,48 @@ public:
    fpos_t block_ptrs;
    fpos_t freeblock_ptr;
    int blocksAllocated = 0;
-   int freeBlocks = 0;  
-   //rewind (disk); //No need use fseek & SEEK_SET--false --TRUE
-   fseek(disk, 1, SEEK_SET); //Skipping the super block
-   
-  for (int j = 1; j<128; j++) // Counting free blocks
-  {
-    int c = getc(disk);
-     //printf("Int c: %d\n" , c); 
-    if (c == 0)   
-     { 
-       // printf("FreeBlock!\n");      
-       freeBlocks++; 
-     }
-   } //4 loop
-
-   printf("%d\n" , freeBlocks);
+   int freeBlocks;  
+   int done = 0;
+ 
+   freeBlocks = getFreeBlocks();  //Getting free blocks
+    printf("[CREATE TEST FREE BLOCKS] : There are  %d\n freeblocks" , freeBlocks);
 
   if (size <= freeBlocks)
    {
-     // We have space for the file
+    printf("[CREATE] : Size %d is <= freeblocks %d\n" , size , freeBlocks); 
+    // We have space for the file
     fseek(disk, 128, SEEK_SET); //Moving to inodes
+    printf("[CREATE] : Moving to inodes\n");
     for(int j =1; j<=16; j++)
       {
-       fseek(disk,  (j * 48), SEEK_CUR); //Iterating through inodes
+     //  fseek(disk,  (j * 48), SEEK_CUR); //Iterating through inodes                 MIGHT NOT NEED J 
+       fseek(disk , 48 , SEEK_CUR);
+       printf("[CREATE] : Checking inode used paramter\n");
        if (fgetpos ( disk, &inode_begin) != 0)
-         printf("ERROR: with fgetpos funtion\n");
+         printf("  [CREATE ERROR] : with fgetpos funtion\n");
  
        //Scanning to check if inode is free
        fseek(disk, 44 , SEEK_CUR);  //Seeking to used parameter --Total inode size = 48, 
-       if (getc(disk) == 0)
+      
+       int c = getc(disk);
+       printf("[CREATE] : Inode used parameter is %d\n" , c); 
+       if ( c == 0)
         {
         // fsetpos(disk, &inode_begin);
        
-         fseek(disk, -4 , SEEK_CUR); //Going back to the used parameter
+         ungetc(c, disk); //Going back to the used parameter
          fputc(1, disk);
+         printf("[CREATE] : Inode is free replacing with 1\n");
          //**IDEA**//
          //Maybe instead of going back to used parameter go back to the begining of inode and write from the begining
          fsetpos(disk, &inode_begin); 
+         printf("[CREATE] : Moving back to the begining of Inode\n");
          fwrite(name, 1, 8, disk); //8 maybe incorrect, filename <=8
-                                    //maynot matter
+         printf("[CREATE] : Writing file name %s to disk\n" , name);                           //maynot matter
          fputc(size, disk); //writing to size
+         printf("[CREATE] : Writing size to disk %d to disk\n" , size); 
          fgetpos(disk ,&block_ptrs);
-         fseek(disk, 1, SEEK_SET); //Moving to freeblock list
+         fseek(disk, 1, SEEK_SET); //Moving to freeblock list (Maybe comment out)
           
           //set up blockPointer (no idea)
           for (int j = 1; j<128; j++)
@@ -89,9 +149,9 @@ public:
            {
             if (getc(disk) == 0)
             {
-             printf("blockAllocated\n");
+             printf("  [CREATE] : A block is about to be allocated\n");
              fseek(disk, -1, SEEK_CUR);
-             fputc(1 , disk);                  //Replaced 0 with 1
+             fputc(1 , disk);              
              fgetpos(disk , &freeblock_ptr);   //Store location of the current free block 
              //fseek(disk, -1, SEEK_CUR); 
 /*TEST*/     fsetpos(disk , &block_ptrs + blocksAllocated);      //Move pos to blockpointers 
@@ -101,20 +161,30 @@ public:
              //fseek(disk, 1, SEEK_CUR);
             }
            }
-           else //wrote out all the blocks
-            break;
-          
+            else //wrote out all the blocks for this file
+             {
+               done = 1;
+               printf("[CREATE] : Successfully wrote out file\n"); 
+               break;
+              }
+      
          }//4 loop
  
      
-       }//getc   
+        }//getc   
   
+      if (done == 1)
+       {
+        printf("[CREATE] : Breaking for loop\n");
+        break;
+       } 
      fsetpos(disk, &inode_begin); //Setting back to begining of inode
     } //4 loop
-   }//if 
+   
+   }//if size <= blocks
     else
      { //We dont have space for the file
-      printf("ERROR: File can not fit on disk\n");
+      printf("  [CREATE ERROR]: File can not fit on disk\n");
      }
    
     // high level pseudo code for creating a new file
@@ -167,7 +237,7 @@ fseek(disk, 1, SEEK_SET); //Skipping the super block
 
 
 
-  int deleete(char name[8])
+  int remove(char name[8])
   {
     // Delete the file with this name
 
@@ -200,11 +270,45 @@ fseek(disk, 1, SEEK_SET); //Skipping the super block
 
   int ls()
   { 
+   char* filename;
+   int * size; 
     // List names of all files on disk
+   fseek(disk, 129 ,SEEK_SET);
+   
+    
 
     // Step 1: read in each inode and print
     // Move file pointer to the position of the 1st inode (129th byte)
-    // for(i=0;i<16;i++)
+     
+     for(int i=1;i<=16;i++) //Scanning 16 inodes
+     {
+     fseek(disk, 44, SEEK_CUR); //Moved to used position 
+     if (getc(disk)  != 0)      //If used position is not 0
+      {
+       fseek(disk , -44 , SEEK_CUR); //Go back to name position
+       //Print out name;
+       fread(filename, 1, 8, disk);
+       //Print out size;
+       fseek(disk, 8 , SEEK_CUR);
+       fread(size, 4, 1, disk);
+       printf("Filename: ");
+       //DEBUGING FILENAME
+       for (int j = 0; j < 8; j++)
+       {
+        printf("%c",filename[j]);
+       }  
+       
+       //DEBUGING SIZE
+       printf("/n%d/n",*size);
+  
+
+       fseek(disk, -12 , SEEK_CUR); //Go back to name position
+      }
+      fseek(disk, 48, SEEK_CUR);   
+      
+
+
+    }
       // Read in an inode
       // If the inode is in-use
         // print the "name" and "size" fields from the inode
@@ -242,27 +346,36 @@ fseek(disk, 1, SEEK_SET); //Skipping the super block
   fpos_t filename_ptr;
   fpos_t size_ptr; 
 
+  /*
     fseek(disk , 128 , SEEK_SET);
     for (int j = 0; j < 16; j++)
     {
      fgetpos(disk, &filename_ptr);
-     char* fileNameptr = (char *) filename_ptr;
+     //char* fileNameptr = *filename_ptr;
       
      if (strcmp(fileNameptr , name) == 0)
       { //Filenames are equal!
         fseek(disk , 8 , SEEK_CUR);
-        fgetpos(disk, &size_ptr); 
-        fseek(disk, 12 + blockNum, SEEK_CUR);
-        fputs(buf, disk);
-        break; 
-      }
-     else
-     {
-      fseek(disk, 48 , SEEK_CUR);
-
-     }
+        fgetpos(disk, &size_ptr);
+          int maxSize = -44;    //ERROR = (int *) size_ptr;
+         
+         if (blockNum <= maxSize)
+         {
+         fseek(disk, 12 + blockNum, SEEK_CUR);
+         fputs(buf, disk);
+         printf("   [WRITE] : Successful wrote file to disk\n");
+         break;  //Found the file, writing and breakng for loop
+         } else
+           {
+            printf("[WRITE_ERROR] : BlockNum is larger than file size\n");
+           break; //Cant write end for loop
+           }    
+      } else //Advancing to the next inode
+       {
+       printf("   [WRITE] : inode did not match filename..Traversing..\n");
+       fseek(disk, 48 , SEEK_CUR);
+       }
      
-    }
 
 
 
@@ -281,14 +394,16 @@ fseek(disk, 1, SEEK_SET); //Skipping the super block
     // Write the block! => Write 1024 bytes from the buffer "buff" to 
     //   this location
   return 0;
-  } // end write
+*/  } // end write
 };
 
 int main ()
 {
-  FileSystem File ("disk0");
-  
-  File.create("File" , 2);
+  FileSystem FS ("disk0");
+ // printf("HELLO\n");
+  FS.populateInodes();
+ // File.create("File" ,9 );
+  printf("Freeblocksd\n",  FS.getFreeBlocks());
 //  printf("Free Blocks is: %d\n" , File.checkFreeBlocks(File.disk));
 
 
