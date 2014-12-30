@@ -1,7 +1,7 @@
 OS_Projects
 ===========
 
-This reposistory consists of all most of the projects I worked on for my Fall semester of 2014
+This repository consists of all most of the projects I worked on for my Fall semester of 2014
 
 #### Language used:  C++. 
 
